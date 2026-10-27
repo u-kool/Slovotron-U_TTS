@@ -1,28 +1,32 @@
-let streamerUser = null;
 
-function create_chat_connection(channelName = '') {
+
+// Режим U_TTS: чат берём из шины WebSocket приложения (все платформы из «Подключений»),
+// собственное tmi-подключение к Twitch не создаётся.
+const UTTS_MODE = true;
+
+function create_chat_connection(channel_name = '') {
+
+    if (UTTS_MODE) return Promise.resolve();
 
     if (tmi_client) {
         tmi_client.disconnect().catch((err) => console.error('Error disconnecting:', err));
     }
 
     tmi_client = new tmi.Client({
-        channels: [channelName]
+        channels: [channel_name]
     });
 
     // Слушаем сообщения
     // user — это объект со всей инфой (цвет ника, бейджи, id сообщения и т.д.)
     tmi_client.on('message', async (channel, user, message, self) => {
+        handle_chat_message(user, user['color'] || '#00FF00', message);
+    });
 
-        if (user.badges?.broadcaster && user.username?.toLowerCase() === channel_name.toLowerCase()) {
-            streamerUser = { ...streamerUser, ...user };
-        }
+    // Подключаемся
+    return tmi_client.connect();
+}
 
-        // console.log(channel, user, message);
-
-        const color = user['color'] || '#00FF00';
-        // const name = user['display-name'];
-        // console.log(user['display-name']);
+async function handle_chat_message(user, color, message) {
 
         // проверка на подсказку, дальше не идем
         if (handle_tip_command(message, user['username'])) return;
@@ -35,7 +39,7 @@ function create_chat_connection(channelName = '') {
             user.badges?.moderator;
 
         const command = message.toLowerCase();
-        if (['!слв-топ', '!словотрон-топ'].includes(command.trim())) {
+        if (command.includes('слв-топ') || command.includes('словотрон-топ') || command.includes('слв топ') || command.includes('словотрон топ')) {
             showLeaderboardTemporarily();
             return;
         }
@@ -57,10 +61,14 @@ function create_chat_connection(channelName = '') {
             setManualGuessReady(false);
             secret_word_id = await generate_secret_word();
             reset_round();
+            document.getElementById('winner').style.display = 'none';
+            const leaderboardSection = document.getElementById('leaderboard-statistic');
+            if (leaderboardSection) leaderboardSection.style.display = 'none';
             sendWebhookEvent('game-new', {
                 challenge_id: secret_word_id,
                 secret_word: current_secret_word_data?.secret_word || null
             });
+            if (typeof __slvPublishGameKey === 'function') __slvPublishGameKey(secret_word_id, current_secret_word_data);
             is_game_finished = false;
             setManualGuessReady(true);
             return;
@@ -72,10 +80,6 @@ function create_chat_connection(channelName = '') {
         }
 
         enqueue_guess(user, color, message);
-    });
-
-    // Подключаемся
-    return tmi_client.connect();
 }
 
 function handle_tip_command(message = '', username = '') {
@@ -143,30 +147,65 @@ async function runQueue() {
 async function app() {
     try {
         setManualGuessReady(false);
-        streamerUser = null;
         const ready = loadSettings();
 
         if (ready) {
 
             reset_round();
 
-            // получение секретного слова и данных стримера параллельно
-            const [secretId, twitchUser] = await Promise.all([
-                generate_secret_word(),
-                getTwitchUserData(channel_name).catch(e => {
-                    console.warn('Не удалось получить данные стримера для аналитики:', e);
-                    return null;
-                })
-            ]);
-
-            if (twitchUser) {
-                streamerUser = {
-                    username: twitchUser.login || channel_name,
-                    'display-name': twitchUser.displayName || channel_name,
-                    'user-id': twitchUser.id
-                };
+            // Дожидаемся загрузки настроек оверлея (ovSettings), чтобы получить
+            // общий ключ игры, если он уже был создан другой инстанцией (OBS/приложение).
+            if (!window.ovSettings) {
+                await new Promise(resolve => {
+                    const check = setInterval(() => {
+                        if (window.ovSettings) { clearInterval(check); resolve(); }
+                    }, 100);
+                    setTimeout(() => { clearInterval(check); resolve(); }, 3000);
+                });
             }
-            secret_word_id = secretId;
+
+            let twitchUser = null;
+
+            // Если в общих настройках уже есть ключ игры — используем его.
+            // Проверяем, жива ли игра на бэкенде; если нет — генерируем новую.
+            if (window.ovSettings && typeof window.ovSettings.slv_game_key === 'string' && window.ovSettings.slv_game_key) {
+                secret_word_id = window.ovSettings.slv_game_key;
+                if (window.ovSettings.slv_game_data && typeof window.ovSettings.slv_game_data === 'object') {
+                    current_secret_word_data = window.ovSettings.slv_game_data;
+                }
+                const isLive = await backend_game_is_live(secret_word_id).catch(() => null);
+                if (isLive === false) {
+                    // игра устарела — создаём новую и публикуем
+                    const [newId, tu] = await Promise.all([
+                        generate_secret_word(),
+                        getTwitchUserData(channel_name).catch(e => {
+                            console.warn('Не удалось получить данные стримера для аналитики:', e);
+                            return null;
+                        })
+                    ]);
+                    secret_word_id = newId;
+                    twitchUser = tu;
+                    if (typeof __slvPublishGameKey === 'function') __slvPublishGameKey(secret_word_id, current_secret_word_data);
+                } else {
+                    twitchUser = await getTwitchUserData(channel_name).catch(e => {
+                        console.warn('Не удалось получить данные стримера для аналитики:', e);
+                        return null;
+                    });
+                }
+            } else {
+                // ключа нет — создаём новую игру и публикуем ключ
+                const [newId, tu] = await Promise.all([
+                    generate_secret_word(),
+                    getTwitchUserData(channel_name).catch(e => {
+                        console.warn('Не удалось получить данные стримера для аналитики:', e);
+                        return null;
+                    })
+                ]);
+                secret_word_id = newId;
+                twitchUser = tu;
+                if (typeof __slvPublishGameKey === 'function') __slvPublishGameKey(secret_word_id, current_secret_word_data);
+            }
+
             console.log('Ключ игры: ', secret_word_id);
             sendWebhookEvent('game-new', {
                 challenge_id: secret_word_id,
@@ -197,8 +236,12 @@ async function app() {
                 startParams.avg_viewers = twitchTrackerSummary.avg_viewers;
             }
 
-            analytics_set_visit_params(startParams);
-            analytics_reach_goal('game_start', startParams);
+            if (typeof analytics_set_visit_params === 'function') {
+                analytics_set_visit_params(startParams);
+            }
+            if (typeof analytics_reach_goal === 'function') {
+                analytics_reach_goal('game_start', startParams);
+            }
 
         } else {
             setManualGuessReady(false);
@@ -226,9 +269,7 @@ if (manualGuessForm && manualGuessInput) {
             return;
         }
 
-        const streamer = streamerUser
-            ? { ...streamerUser }
-            : { username: channel_name, 'display-name': channel_name };
+        const streamer = { username: channel_name, 'display-name': channel_name };
         const message = manualGuessInput.value;
 
         if (handle_tip_command(message, streamer.username)) {

@@ -2,9 +2,9 @@ const channelInput = document.getElementById("channel-name");
 const restartInput = document.getElementById("restart-time");
 const winSoundUrlInput = document.getElementById('win-sound-url');
 const avatarInput = document.getElementById('win-avatar-enable');
-const winNotificationInput = document.getElementById('win-notification-enable');
 const soundInput = document.getElementById('sound-enable');
 const manualGuessSettingInput = document.getElementById('manual-guess-enable');
+const showNicknamesInput = document.getElementById('show-nicknames');
 const manualGuessSection = document.getElementById('manual-guess');
 const saveBtn = document.getElementById('save-settings-btn');
 const obsLinkInput = document.getElementById('obs-link');
@@ -64,12 +64,12 @@ function generateObsLink() {
         params.set('win_avatar_enable', avatarInput.checked ? '1' : '0');
     }
 
-    if (winNotificationInput) {
-        params.set('win_notification_enable', winNotificationInput.checked ? '1' : '0');
-    }
-
     if (soundInput) {
         params.set('sound_enable', soundInput.checked ? '1' : '0');
+    }
+
+    if (showNicknamesInput) {
+        params.set('show_nicknames', showNicknamesInput.checked ? '1' : '0');
     }
 
     if (gameBackendInput) {
@@ -90,7 +90,7 @@ function generateObsLink() {
         params.set('inactive_timeout', overlay_idle_timeout);
     }
 
-    if (overlay_idle_opacity >= 0 && overlay_idle_opacity < 1) {
+    if (overlay_idle_opacity >= 0 && overlay_idle_opacity <= 1) {
         params.set('inactive_opacity', overlay_idle_opacity);
     }
 
@@ -166,9 +166,9 @@ function loadSettings() {
     const storedRestartTime = urlParams.get('restart_time') || localStorage.getItem('restart_time');
     const storedWinSoundUrl = getSettingValue(urlParams, 'win_sound_url', 'win_sound_url');
     const storedAvatarInput = getSettingValue(urlParams, 'win_avatar_enable', 'win_avatar_enable');
-    const storedWinNotificationInput = getSettingValue(urlParams, 'win_notification_enable', 'win_notification_enable');
     const storedSoundInput = getSettingValue(urlParams, 'sound_enable', 'sound_enable');
     const storedManualGuessInput = localStorage.getItem('manual_guess_enable');
+    const storedShowNicknamesInput = getSettingValue(urlParams, 'show_nicknames', 'show_nicknames');
 
     if (storedChannel) {
         channel_name = storedChannel;
@@ -193,9 +193,6 @@ function loadSettings() {
         if (avatarInput) avatarInput.checked = win_avatar_enable;
     }
 
-    win_notification_enable = storedWinNotificationInput === null ? true : parseBooleanSetting(storedWinNotificationInput);
-    if (winNotificationInput) winNotificationInput.checked = win_notification_enable;
-
     if (storedSoundInput !== null) {
         sound_enable = parseBooleanSetting(storedSoundInput);
         if (soundInput) soundInput.checked = sound_enable;
@@ -204,6 +201,11 @@ function loadSettings() {
     if (storedManualGuessInput !== null) {
         manual_guess_enable = parseBooleanSetting(storedManualGuessInput);
         if (manualGuessSettingInput) manualGuessSettingInput.checked = manual_guess_enable;
+    }
+
+    if (storedShowNicknamesInput !== null) {
+        show_nicknames = parseBooleanSetting(storedShowNicknamesInput);
+        if (showNicknamesInput) showNicknamesInput.checked = show_nicknames;
     }
     updateManualGuessVisibility();
 
@@ -228,6 +230,9 @@ function loadSettings() {
     // Генерируем ссылку OBS при загрузке страницы
     generateObsLink();
 
+    // В режиме U_TTS игра работает без Twitch-канала: чат приходит из приложения.
+    if (typeof UTTS_MODE !== 'undefined' && UTTS_MODE) return true;
+
     return !!channel_name;
 }
 
@@ -250,18 +255,6 @@ if (saveBtn) {
             localStorage.setItem('win_avatar_enable', avatarInput.checked);
         }
 
-        if (winNotificationInput) {
-            win_notification_enable = winNotificationInput.checked;
-            localStorage.setItem('win_notification_enable', win_notification_enable);
-
-            // Обновляем параметр URL, чтобы loadSettings() не отменил сохранённый выбор.
-            const url = new URL(window.location.href);
-            if (url.searchParams.has('win_notification_enable')) {
-                url.searchParams.set('win_notification_enable', win_notification_enable ? '1' : '0');
-                window.history.replaceState(window.history.state, '', url);
-            }
-        }
-
         if (soundInput) {
             localStorage.setItem('sound_enable', soundInput.checked);
         }
@@ -270,6 +263,11 @@ if (saveBtn) {
             manual_guess_enable = manualGuessSettingInput.checked;
             localStorage.setItem('manual_guess_enable', manual_guess_enable);
             updateManualGuessVisibility();
+        }
+
+        if (showNicknamesInput) {
+            show_nicknames = showNicknamesInput.checked;
+            localStorage.setItem('show_nicknames', show_nicknames);
         }
 
         if (gameBackendInput && GAME_BACKENDS[gameBackendInput.value]) {
@@ -391,13 +389,6 @@ if (avatarInput) {
 
 if (soundInput) {
     soundInput.addEventListener("input", () => {
-        checkFormsValidity();
-    });
-}
-
-if (winNotificationInput) {
-    winNotificationInput.addEventListener("input", () => {
-        generateObsLink();
         checkFormsValidity();
     });
 }

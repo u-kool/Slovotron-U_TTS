@@ -23,9 +23,15 @@ function markOverlayActivity() {
 }
 
 function addAnythingToLastWords(html) {
-    last_words_container.insertAdjacentHTML('afterbegin', html);
-    while (last_words_container.children.length > MAX_LAST_WORDS) {
-        last_words_container.removeChild(last_words_container.lastElementChild);
+    if (window.slvWordLayout === 'classic') {
+        // «Классический»: копим ленту последних слов (как в оригинальной игре)
+        last_words_container.insertAdjacentHTML('afterbegin', html);
+        while (last_words_container.children.length > MAX_LAST_WORDS) {
+            last_words_container.removeChild(last_words_container.lastElementChild);
+        }
+    } else {
+        // «Контекстно»: сверху всегда только одно последнее слово
+        last_words_container.innerHTML = html;
     }
 }
 function addTextToLastWords(text = '') {
@@ -74,6 +80,8 @@ function getDistanceColor(distance) {
         return colors[4];
     }
 }
+
+
 
 
 async function process_message(user, nickname_color, word, force_win = false) {
@@ -152,23 +160,16 @@ async function process_message(user, nickname_color, word, force_win = false) {
         user['display-name'],
         nickname_color
     );
-    // добавить слово в колонку .guessing .last-words в верх списка
+
+    // левый блок - только последнее введённое слово
     addAnythingToLastWords(new_message);
 
-    // добавить слово в колонку .guessing .best-match в нужное место в зависимости от дистанции
+    // правый блок - сортировка по дистанции как в оригинале
     addMatchWord(new_message, word_check.distance);
 
     // обработка победы (слово угадано)
     if (word_check.distance == 1) {
-        const winNotification = !win_notification_enable || force_win ? null : {
-            channel_login: channel_name,
-            backend_id: getActiveBackend().id,
-            word_id: secret_word_id,
-            round_id: String(roundStartTime),
-            winner_login: user.username
-        };
         handle_win(user, word);
-        if (winNotification) sendWinNotification(winNotification);
     }
 
 }
@@ -207,6 +208,11 @@ function addMatchWord(new_message, distance) {
     } else {
         container.insertBefore(newMsgElement, children[insertIndex]);
     }
+
+    // «Контекстно» — держим не более топ-10 по дистанции, «Классический» — как в оригинале
+    while (window.slvWordLayout !== 'classic' && container.children.length > 10) {
+        container.removeChild(container.lastElementChild);
+    }
 }
 
 function message_template(word, distance, name, nickname_color) {
@@ -223,15 +229,15 @@ function message_template(word, distance, name, nickname_color) {
                     <div class="word">${render_word_html(word)}</div>
                     <div class="distance">${distance}</div>
                 </div>
-                <div class="name" style="color: ${nickname_color}; white-space: nowrap;">
+                ${show_nicknames ? `<div class="name" style="color: ${nickname_color}; white-space: nowrap;">
                     <span>${name}</span>
-                </div>
+                </div>` : ''}
             </div>
         </div>
     `;
 }
 
-function play_win_sound() {
+function play_win_sound(winner_user, winning_word = '') {
     if (!sound_enable) return;
 
     const play = (url) => {
@@ -240,9 +246,66 @@ function play_win_sound() {
         audio.play().catch(e => console.error('Ошибка воспроизведения звука победы:', e));
     };
 
-    play(DEFAULT_WIN_SOUND_URL);
-    if (win_sound_url) {
-        play(win_sound_url);
+    const nick = winner_user && winner_user['display-name'] ? String(winner_user['display-name']).trim() : '';
+    const hasVoice = (Array.isArray(win_blocks) && win_blocks.length) || !!win_voice;
+    // Победа «подсказкой» озвучивается так же, как обычная: при настроенных блоках
+    // — генерация ({UserName} = «💡 Подсказка»), без блоков — встроенный mp3.
+    if (!winner_user || !nick) {
+        play(DEFAULT_WIN_SOUND_URL);
+        if (win_sound_url) play(win_sound_url);
+        return;
+    }
+
+    // Встроенный mp3 и свой URL-звук играют только когда TTS-озвучка не настроена:
+    // при настроенных блоках победный звук — генерация из модалки.
+    if (!hasVoice) {
+        play(DEFAULT_WIN_SOUND_URL);
+        if (win_sound_url) {
+            play(win_sound_url);
+        }
+    }
+
+    const vars = {
+        '{UserName}': nick, '{User}': nick, '{Nickname}': nick,
+        '{Word}': winning_word ? String(winning_word) : '',
+    };
+    const speak = (text, block) => {
+        const body = { text: text, voice: block.voice, forceVoice: true };
+        if (block.rate) body.rate = block.rate;
+        if (block.volume) body.volume = block.volume;
+        if (block.pitch) body.pitch = block.pitch;
+        if (block.speed) body.speed = block.speed;
+        if (block.reverb) body.reverb = block.reverb;
+        if (block.qwen3_language) body.qwen3_language = block.qwen3_language;
+        if (block.language) body.language = block.language;
+        fetch('/api/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        }).catch(e => console.error('Ошибка озвучки победы:', e));
+        // Текст объявления — в чат главного окна и в журнал событий ((EVENT)
+        fetch('/api/notice', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ kind: 'event', user: nick, text: text, platform: 'slovotron' })
+        }).catch(e => console.error('Ошибка отправки объявления в чат:', e));
+    };
+
+    if (Array.isArray(win_blocks) && win_blocks.length) {
+        for (const block of win_blocks) {
+            const messages = Array.isArray(block.messages) ? block.messages : [];
+            for (const m of messages) {
+                const tpl = m && typeof m.message === 'string' ? m.message : '';
+                if (!tpl.trim()) continue;
+                let text = tpl;
+                for (const k in vars) text = text.split(k).join(vars[k]);
+                if (text.trim()) speak(text, block);
+            }
+        }
+    } else if (win_voice) {
+        let text = 'Победитель — ' + nick + '!';
+        if (winning_word) text += ' Загаданное слово — ' + winning_word + '.';
+        speak(text, { voice: win_voice });
     }
 }
 
@@ -255,7 +318,7 @@ function handle_win(winner_user, winning_word = '') {
     tip_menu_button.style.display = 'none';
 
     if (typeof updateLeaderboard === 'function') {
-        updateLeaderboard(winner_user['user-id'], winner_user['display-name'], winner_user.username);
+        updateLeaderboard(winner_user['display-name']);
         const leaderboardSection = document.getElementById('leaderboard-statistic');
         if (leaderboardSection) leaderboardSection.style.display = 'flex';
     }
@@ -280,7 +343,6 @@ function handle_win(winner_user, winning_word = '') {
 
     sendWebhookEvent('game-win', {
         winner: {
-            id: winner_user['user-id'] || '',
             login: winner_user.username || '',
             display_name: winner_user['display-name'] || winner_user.username || ''
         },
@@ -315,7 +377,7 @@ function handle_win(winner_user, winning_word = '') {
         confetti_fireworks(confettiTimeout);
     }
 
-    play_win_sound();
+    play_win_sound(winner_user, winning_word);
 
     if (restart_time > 0 && !document.hidden) {
         const menuTimer = document.getElementById('menu-timer');
@@ -349,6 +411,7 @@ async function resetRoundTimeout(time) {
                 challenge_id: secret_word_id,
                 secret_word: current_secret_word_data?.secret_word || null
             });
+            if (typeof __slvPublishGameKey === 'function') __slvPublishGameKey(secret_word_id, current_secret_word_data);
         } catch (e) {
             console.error(e);
         }
@@ -367,6 +430,8 @@ async function resetRoundTimeout(time) {
 function reset_round() {
     last_words_container.innerHTML = '';
     best_match_container.innerHTML = '';
+    var uttsLastWord = document.getElementById('utts-last-word');
+    if (uttsLastWord) uttsLastWord.innerHTML = '';
     stop_confetti();
     // The tip mechanic only exists on backends that expose a hint endpoint.
     tip_menu_button.style.display = backend_supports_tips() ? 'block' : 'none';

@@ -98,6 +98,8 @@ async function use_tip(user = '', force = false) {
     }
     if (!tip_word?.distance) {
         console.error('tip_word.distance is undefined', tip_word);
+        // Provide a default distance so the game doesn't break
+        tip_word = { word: tip_word?.word || 'слово', distance: best_found_distance || 1 };
         abort_tip();
         return;
     }

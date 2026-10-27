@@ -2,12 +2,14 @@
 let channel_name = '';
 let restart_time = 20;
 let win_avatar_enable = false;
-let win_notification_enable = true;
 let sound_enable = true;
 const DEFAULT_WIN_SOUND_URL = 'audio/slovotron-win.mp3';
 const WIN_SOUND_VOLUME = 0.5; // громкость победного звука: от 0 до 1
 let win_sound_url = '';
+let win_voice = ''; // TTS-голос U_TTS: озвучить победителя через /api/generate; пусто = не озвучивать
+let win_blocks = []; // голосовые блоки «Настройка: голос победы» (шаблоны {UserName}/{Word})
 let manual_guess_enable = false;
+let show_nicknames = true;
 let webhook_url = '';
 let webhook_secret = '';
 let game_backend = 'kontekstno'; // active word-guessing backend: 'kontekstno' | 'wordgun'
@@ -17,6 +19,8 @@ let current_secret_word_data = null;
 
 // Состояние игры
 let secret_word_id = '';
+let shared_game_id = '';
+let shared_game_data = null;
 let words_count = 0;
 let is_game_finished = false;
 let manual_guess_ready = false;
@@ -39,7 +43,7 @@ const checked_words = new Map();
 let wordQueue = [];
 let tmi_client = null;
 let overlay_idle_timeout = 6;
-let overlay_idle_opacity = 0.75;
+let overlay_idle_opacity = 0.25;
 let overlay_idle_timeout_id = null;
 let is_overlay_idle = false;
 

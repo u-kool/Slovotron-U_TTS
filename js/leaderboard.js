@@ -21,31 +21,18 @@ function getLeaderboardData() {
 
 function saveLeaderboardData(data) {
     localStorage.setItem(LEADERBOARD_KEY, JSON.stringify(data));
+    // режим U_TTS: публикуем таблицу в хранилище темы — её показывает панель «Настройки оверлея»
+    if (typeof window.__slvPublishLeaderboard === 'function') window.__slvPublishLeaderboard();
 }
 
-function updateLeaderboard(winnerId, winnerName, winnerLogin = '') {
-    const winnerKey = winnerId || winnerName;
-    if (!winnerKey) return;
-    const data = getLeaderboardData();
-    const keysToMerge = new Set([String(winnerKey)]);
-
-    if (winnerId) {
-        const aliases = new Set([winnerName, winnerLogin].filter(Boolean).map(name => name.toLowerCase()));
-        for (const [key, entry] of Object.entries(data)) {
-            // Merge name-keyed records only; another player's ID must remain separate.
-            const isNameKey = typeof entry === 'number' || (entry && key === entry.name);
-            if (isNameKey && aliases.has(key.toLowerCase())) keysToMerge.add(key);
-        }
+function updateLeaderboard(winnerName) {
+    let data = getLeaderboardData();
+    if (data[winnerName]) {
+        data = Object.assign({ [winnerName]: data[winnerName]++ }, data);
+    } else {
+        data = Object.assign({ [winnerName]: 1 }, data);
     }
-
-    let wins = 1;
-    for (const key of keysToMerge) {
-        const entry = data[key];
-        const count = entry && typeof entry === 'object' ? entry.value : entry;
-        if (Number.isFinite(count)) wins += count;
-        delete data[key];
-    }
-    saveLeaderboardData({ ...data, [winnerKey]: { value: wins, name: winnerName } });
+    saveLeaderboardData(data);
     renderLeaderboard();
     renderStatistic();
 }
@@ -59,12 +46,7 @@ function renderLeaderboard() {
 
     // Convert to array and sort
     const sortedWinners = Object.entries(data)
-        .sort((a, b) => {
-            const aValue = a[1] && typeof a[1] === 'object' ? a[1].value : a[1]
-            const bValue = b[1] && typeof b[1] === 'object' ? b[1].value : b[1]
-
-            return bValue - aValue
-        }) // Sort by count descending
+        .sort((a, b) => b[1] - a[1]) // Sort by count descending
         .slice(0, 5); // Take top 5
 
     if (sortedWinners.length === 0) {
@@ -73,9 +55,8 @@ function renderLeaderboard() {
     }
 
     sortedWinners.forEach((item, index) => {
-        const isObject = item[1] && typeof item[1] === 'object' && 'name' in item[1]
-        const name = isObject ? item[1].name : item[0];
-        const wins = isObject ? item[1].value : item[1];
+        const name = item[0];
+        const wins = item[1];
 
         const itemDiv = document.createElement('div');
         itemDiv.className = 'leaderboard-item';
@@ -111,6 +92,7 @@ function resetLeaderboard() {
     if (doReset) {
         localStorage.removeItem(LEADERBOARD_KEY);
         renderLeaderboard();
+        if (typeof window.__slvPublishLeaderboard === 'function') window.__slvPublishLeaderboard();
     }
 }
 
@@ -124,9 +106,7 @@ function setLeaderboardVisible(isVisible) {
         renderLeaderboard();
         renderStatistic();
         lbStatRender = setInterval(function () {
-            if (is_game_finished) {
-                clearInterval(lbStatRender)
-            }
+            if (is_game_finished) { clearInterval(lbStatRender) }
             renderStatistic();
         }, 1000)
     }
@@ -134,14 +114,29 @@ function setLeaderboardVisible(isVisible) {
 
 function showLeaderboardTemporarily() {
     const leaderboardSection = document.getElementById('leaderboard-statistic');
-    if (leaderboardSection.style.display !== 'none') return;
+    if (!leaderboardSection) return;
 
-    setLeaderboardVisible(true);
+    // Всегда принудительно показываем таблицу лидеров на время «Перезапуск раунда»,
+    // даже если она уже была видна, и сбрасываем предыдущий таймер.
+    // Раунд при этом продолжается — таблица чисто информационная.
+    clearTimeout(leaderboardHideTimeoutId);
+    clearInterval(lbStatRender);
+    leaderboardSection.style.display = 'flex';
+    renderLeaderboard();
+    renderStatistic();
+    lbStatRender = setInterval(function () {
+        if (is_game_finished) { clearInterval(lbStatRender); }
+        renderStatistic();
+    }, 1000);
+
+    const showDurationMs = (typeof restart_time !== 'undefined' && restart_time > 0)
+        ? restart_time * 1000 : 5000;
     leaderboardHideTimeoutId = setTimeout(() => {
         leaderboardHideTimeoutId = null;
-        // На экране победы статистика должна оставаться видимой.
-        if (!is_game_finished) setLeaderboardVisible(false);
-    }, 5000);
+        clearInterval(lbStatRender);
+        // Не скрываем таблицу, если раунд уже завершен.
+        if (!is_game_finished) leaderboardSection.style.display = 'none';
+    }, showDurationMs);
 }
 
 // Event Listeners for Leaderboard
@@ -160,18 +155,12 @@ for (const btn of resetLeaderboardBtns) {
     btn.addEventListener('click', resetLeaderboard);
 }
 
-function pad(val) {
-    return val > 9 ? val : "0" + val;
-}
+function pad(val) { return val > 9 ? val : "0" + val; }
 
 function renderStatistic() {
-    if (!is_game_finished) {
-        winTime = Date.now()
-    }
+    if (!is_game_finished) { winTime = Date.now() }
     let roundTime = Math.floor((winTime - roundStartTime) / 1000);
-    if (!roundTime) {
-        roundTime = 0
-    }
+    if (!roundTime) { roundTime = 0 }
     const roundTimeSec = pad(roundTime % 60);
     const roundTimeMin = pad(parseInt(roundTime / 60, 10));
     const roundTimeQt = roundTimeMin + ':' + roundTimeSec;
