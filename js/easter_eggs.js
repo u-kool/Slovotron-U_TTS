@@ -1,10 +1,5 @@
 const celebrities = [
-    {
-        id: "fra3a",
-        tags: ["fra3a", "fraza", "фра3а", "фраза"],
-        img_left: ["fra3a_1.gif"],
-        img_right: ["fra3a_2.gif", "fra3a_3.gif", "fra3a_4.avif", "fra3a_5.avif"]
-    },
+    
     {
         id: "iwawwa",
         tags: ["ивавва", "ивава", "акане", "аканэ", "iwawwa", "iwawa", "akane", "akane_iwawwa"],
